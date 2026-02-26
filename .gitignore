@@ -6,3 +6,9 @@ __pycache__/
 *.pyd
 *.log
 *.tmp
+
+
+# Ignore PyInstaller build files
+build/
+dist/
+*.spec
