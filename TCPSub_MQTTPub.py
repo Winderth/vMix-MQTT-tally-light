@@ -110,7 +110,8 @@ def vmix_client_thread():
             # Wait before trying to reconnect
             time.sleep(3)
 
-if __name__ == "__main__":
+
+def main():
     # Start the vMix client thread
     vmix_thread = threading.Thread(target=vmix_client_thread, daemon=True)
     vmix_thread.start()
@@ -129,6 +130,9 @@ if __name__ == "__main__":
                 print(f"[MQTT] Published: {MQTT_TOPIC}/{i} = {state}")
     
     vmix_thread.join()
+
+if __name__ == "__main__":
+    main()
 
     
             
