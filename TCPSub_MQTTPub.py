@@ -13,7 +13,9 @@ MQTT_BROKER = 'localhost'
 MQTT_PORT = 1883
 MQTT_TOPIC = 'vmix/tally'
 
-vmix_thread = None
+kill_threads_flag = False
+
+vmix_thread: threading.Thread = None
 client_mqtt: mqtt_client.Client = None
 
 # Variable to hold the current tally state
@@ -25,13 +27,10 @@ tally_state_condition = threading.Condition(state_lock)
 connection_state: bool 
 connection_state_lock = threading.Lock()
 
-def signal_handler(sig, frame):
-    if sig == signal.SIGINT:
-        print("\n[System] Shutting down gracefully...")
-        client_mqtt.disconnect()
-        vmix_thread.join(timeout=1) 
-        sys.exit(0)
 
+def set_kill_threads_flag(value: bool):
+    global kill_threads_flag
+    kill_threads_flag = value
 
 
 def vmix_client_thread():
@@ -40,8 +39,9 @@ def vmix_client_thread():
     """
     global current_tally_state
     global connection_state
+    global kill_threads_flag
     
-    while True:
+    while not kill_threads_flag:
         # Create a TCP socket and attempt to connect to vMix
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(2.0) 
@@ -59,7 +59,7 @@ def vmix_client_thread():
             s.sendall(b'SUBSCRIBE TALLY\r\n')
             
             buffer = ""
-            while True:
+            while not kill_threads_flag:
                 try:
                     
                     # Receive data from vMix
@@ -109,6 +109,7 @@ def vmix_client_thread():
                 s.close()
             # Wait before trying to reconnect
             time.sleep(3)
+    print("[vMix] Client thread exiting.")
 
 
 def main():
@@ -116,19 +117,34 @@ def main():
     vmix_thread = threading.Thread(target=vmix_client_thread, daemon=True)
     vmix_thread.start()
     
-
-    client_mqtt = mqtt_client.Client(mqtt_client.CallbackAPIVersion.VERSION2)
-    client_mqtt.connect(MQTT_BROKER, MQTT_PORT)
-    print(f"[MQTT] Connected to MQTT broker {MQTT_BROKER}:{MQTT_PORT}")
-    signal.signal(signal.SIGINT, signal_handler)
-    while True:
-        with tally_state_condition:
-            tally_state_condition.wait(timeout=5.0)  # Wait for a state change or timeout
+    client_mqtt = mqtt_client.Client()
     
-            for i, state in enumerate(current_tally_state):
-                client_mqtt.publish(f"{MQTT_TOPIC}/{i}", str(state), qos=0)
-                print(f"[MQTT] Published: {MQTT_TOPIC}/{i} = {state}")
+    while not kill_threads_flag:
+        if not client_mqtt.is_connected():
+            try:
+                print(f"[MQTT] Connecting to MQTT broker at {MQTT_BROKER}:{MQTT_PORT}...")
+                error = client_mqtt.connect(MQTT_BROKER, MQTT_PORT)
+                if error == 0:
+                    client_mqtt.loop_start()
+                    print("[MQTT] Connected to MQTT broker.")
+                else:
+                    print(f"[MQTT] Connection failed with error code {error}. Retrying in 5 seconds...")
+                    time.sleep(5)
+                    continue
+            except Exception as e:
+                print(f"[MQTT] Connection failed: {e}")
+                time.sleep(5)
+                continue
+        else:
+            with tally_state_condition:
+                tally_state_condition.wait(timeout=5.0)  # Wait for a state change or timeout
+        
+                for i, state in enumerate(current_tally_state):
+                    client_mqtt.publish(f"{MQTT_TOPIC}/{i}", str(state), qos=0)
+                    print(f"[MQTT] Published: {MQTT_TOPIC}/{i} = {state}")
     
+    client_mqtt.disconnect()
+    print("[MQTT] Disconnected.")
     vmix_thread.join()
 
 if __name__ == "__main__":
